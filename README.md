@@ -23,6 +23,10 @@
 
 <img src="docs/images/mini-window.png" width="360" alt="小窗">
 
+## 配合讲义使用
+
+[course-lecture-notes](https://github.com/chinayuren2022-2025/course-lecture-notes-skill) 是一个把课堂转写、课件和教材整理成自学 HTML 讲义的 Claude Code Skill。它生成的“概念图版”讲义会在 Safari 右下角给本应用的小窗留出位置。生成时它读取小窗当前的尺寸（系统偏好里的 `NSWindow Frame FloatingNotePanel`），所以在这里调好小窗大小以后，讲义的留白也会一样大。
+
 ## 需要什么
 
 - 搭载 Apple 芯片（M1 及更新）的 MacBook，macOS 13 及以上。不支持 Intel 芯片的 Mac。

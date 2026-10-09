@@ -25,6 +25,10 @@ The interface is in Chinese.
 
 <img src="docs/images/mini-window.png" width="360" alt="Mini window">
 
+## Use it with lecture notes
+
+[course-lecture-notes](https://github.com/chinayuren2022-2025/course-lecture-notes-skill) is a Claude Code skill that turns lecture transcripts, slides and textbooks into self-study HTML notes. Its "concept map" edition reserves the bottom-right corner of the Safari window for this app's mini window. When it generates the notes, it reads the mini window's current size from the app's defaults (`NSWindow Frame FloatingNotePanel`), so the reserved space matches whatever size you set here.
+
 ## Requirements
 
 - A MacBook with Apple silicon (M1 or later), macOS 13 or later. Intel Macs are not supported.

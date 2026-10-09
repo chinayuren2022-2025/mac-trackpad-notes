@@ -70,6 +70,8 @@ final class MultitouchReader {
     /// False until the first frame arrives: without Input Monitoring the
     /// device starts but never calls back.
     private(set) var hasDeliveredFrames = false
+    /// systemUptime of the last frame, to notice a stream that went silent.
+    private(set) var lastFrameUptime: TimeInterval = 0
     var onFrame: (([MTFingerSample]) -> Void)?
 
     private let frameworkPath =
@@ -84,7 +86,30 @@ final class MultitouchReader {
     private var device: MTShimDeviceRef?
     private var started = false
 
-    private init() {}
+    private init() {
+        // After sleep the device keeps its callback registered but never calls
+        // it again; a fresh device works.
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.restart() }
+            }
+        }
+    }
+
+    /// Recreates the device if the reader is running. Until the new device
+    /// delivers a frame, hasDeliveredFrames is false so callers fall back to
+    /// the system's touch events.
+    func restart() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.restart() }
+            return
+        }
+        guard started else { return }
+        stop()
+        hasDeliveredFrames = false
+        start()
+    }
 
     func start() {
         guard Thread.isMainThread else {
@@ -136,6 +161,7 @@ final class MultitouchReader {
     fileprivate func publish(_ samples: [MTFingerSample]) {
         guard started else { return }
         hasDeliveredFrames = true
+        lastFrameUptime = ProcessInfo.processInfo.systemUptime
         fingers = samples
         onFrame?(samples)
     }

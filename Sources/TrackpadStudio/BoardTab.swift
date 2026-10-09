@@ -315,7 +315,12 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         captureView.autoresizingMask = [.width, .height]
         captureView.onEvent = { [weak self] event in
             guard let self else { return }
-            if case .touches = event, self.usesRawTouches { return }
+            if case let .touches(touches) = event, self.usesRawTouches {
+                guard self.rawStreamLooksDead(touches) else { return }
+                // Raw frames stopped (missed wake, device reset): get a fresh
+                // device and let the system's events drive the board meanwhile.
+                MultitouchReader.shared.restart()
+            }
             self.handle(event)
         }
         MultitouchReader.shared.onFrame = { [weak self] fingers in
@@ -838,6 +843,25 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             && window is FloatingNotePanel
             && window?.isKeyWindow == true
             && NSWorkspace.shared.frontmostApplication != .current
+    }
+
+    /// Set when a system touch event is dropped in favour of raw frames.
+    private var touchesWithoutRawSince: TimeInterval?
+
+    /// True when the system's touch events have kept arriving for 0.4 s with
+    /// no raw frame in between, i.e. the private reader went silent.
+    private func rawStreamLooksDead(_ touches: [TouchSample]) -> Bool {
+        guard !touches.isEmpty else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        // A marker left over from an earlier stroke says nothing about this one.
+        if let since = touchesWithoutRawSince, now - since < 1.5,
+           MultitouchReader.shared.lastFrameUptime < since {
+            guard now - since > 0.4 else { return false }
+            touchesWithoutRawSince = nil
+            return true
+        }
+        touchesWithoutRawSince = now
+        return false
     }
 
     private func handleRawFrame(_ fingers: [MTFingerSample]) {

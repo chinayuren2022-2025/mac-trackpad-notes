@@ -1612,6 +1612,13 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         lastCursorViewPoint = point
     }
 
+    /// Laser pointer: while ⌥ is held the pen only shows where it is. Read
+    /// from the session state, so it works over other apps too.
+    private var isLaserHeld: Bool {
+        interactionMode == .zen
+            && CGEventSource.flagsState(.combinedSessionState).contains(.maskAlternate)
+    }
+
     private var isDrawingRequested: Bool {
         interactionMode == .zen && pressCalibration == nil &&
             (drawOnContact || isMouseDown || pressureInking)
@@ -1631,6 +1638,14 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
         guard textEditor == nil else {
             cancelActiveDraft()
+            return
+        }
+
+        if isLaserHeld {
+            finishActiveDraft()
+            // Letting go of the key mid-touch must not start a stroke there.
+            drawingSuppressedUntilRelease = true
+            needsDisplay = true
             return
         }
 
@@ -2485,6 +2500,10 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         guard let point = currentCursorViewPoint,
               currentTouches.count == 1 || isThreeFingerDrawing else { return }
 
+        if isLaserHeld, !isThreeFingerDrawing {
+            drawLaserDot(at: point)
+            return
+        }
         let drawing = isDrawingRequested || isThreeFingerDrawing
         if !drawing, !drawOnContact || pressCalibration != nil, currentTool != .eraser {
             drawAimCursor(at: point)
@@ -2513,6 +2532,20 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
         tint.withAlphaComponent(drawing ? 1 : 0.85).setFill()
         fillDot(at: point, radius: (drawing ? 3.4 : 2.6) / 2)
+    }
+
+    /// Laser pointer: a red dot with a soft glow, bright enough to find at a glance.
+    private func drawLaserDot(at point: CGPoint) {
+        let red = NSColor(calibratedRed: 0.95, green: 0.16, blue: 0.12, alpha: 1)
+        for (radius, alpha) in [(16.0, 0.10), (10.0, 0.18), (6.5, 0.35)] as [(CGFloat, CGFloat)] {
+            red.withAlphaComponent(alpha).setFill()
+            NSBezierPath(ovalIn: CGRect(x: point.x - radius, y: point.y - radius,
+                                        width: radius * 2, height: radius * 2)).fill()
+        }
+        red.setFill()
+        fillDot(at: point, radius: 4)
+        NSColor.white.withAlphaComponent(0.9).setFill()
+        fillDot(at: point, radius: 1.5)
     }
 
     /// Light touch in press-to-write mode: a small blue ring and dot where
@@ -2765,6 +2798,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         if currentTool == .eraser { toolText += eraseWholeStrokes ? " · 整笔" : " · 局部" }
         item(toolText)
         if zen, !drawOnContact { item("轻触定位 · 按下书写", color: accentColor) }
+        if isLaserHeld { item("激光笔 · 不出墨", color: .systemRed) }
         item("\(Int((model.zoom * 100).rounded()))%", font: numberFont,
              color: isTwoFingerNavigating ? accentColor : mutedColor)
 

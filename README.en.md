@@ -17,6 +17,7 @@ The interface is in Chinese.
 - **Notes over anything**: press **⌃⌥N** (Control + Option + N) for a mini window that floats over every app, full-screen ones included (web pages, videos, slides). Press it again to put it away; it saves automatically. Drag and resize it; it remembers where it was.
 - **Palm rejection**: reads each contact's shape (size, major/minor axis) and lets only the pen tip ink.
 - **Two ways to start a stroke**: ink on contact, or "a light touch only shows where the tip is, a press writes".
+- **Laser pointer**: hold ⌥ (Option) and the pen tip shows as a red dot without inking, so you can see exactly where it is; works in the mini window too.
 - **Tools**: pen, highlighter, eraser (partial or whole stroke), lasso (select, move, recolor, delete), line, rectangle, ellipse, arrow, text; 5 colors, 3 widths.
 - **Note library** with thumbnails, search and autosave; blank, ruled, grid or dot paper.
 - **Export** to vector PDF or PNG; drop or paste images in.
@@ -44,6 +45,7 @@ The interface is in Chinese.
 |---|---|
 | Show / hide the mini window anywhere | ⌃⌥N |
 | Writing ⇄ pointer mode (click the list, drag the window) | Esc |
+| Laser pointer: show the tip without inking | hold ⌥ |
 | Pen / highlighter / eraser / lasso / line / rectangle / ellipse / arrow | 1 – 8 |
 | Next color / width | C / W |
 | Undo / redo | ⌘Z / ⇧⌘Z |
@@ -55,7 +57,7 @@ The interface is in Chinese.
 ```bash
 xcode-select --install   # once: command line tools
 scripts/deploy.sh        # build and install into ~/Applications
-scripts/make-dmg.sh 1.0  # dist/TrackpadStudio-Handwriting-1.0.dmg
+scripts/make-dmg.sh 1.1  # dist/TrackpadStudio-Handwriting-1.1.dmg
 ```
 
 Test commands are in [AGENTS.md](AGENTS.md).

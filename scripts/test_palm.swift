@@ -125,14 +125,38 @@ struct PalmChecks {
         check(PenAim.anchor(of: palms, hand: .left) == palms[1], "left hand: mirrored")
         check(PenAim.anchor(of: [], hand: .right) == nil, "no palm, no prediction")
         var aim = PenAim(hand: .right)
-        aim.learn(anchor: CGPoint(x: 0.6, y: 0.1), pen: CGPoint(x: 0.3, y: 0.5))
+        aim.learn(anchor: CGPoint(x: 0.6, y: 0.1), carried: nil, pen: CGPoint(x: 0.3, y: 0.5))
         let first = aim.predict(from: CGPoint(x: 0.6, y: 0.1))
         check(abs(first.x - 0.3) < 1e-9 && abs(first.y - 0.5) < 1e-9, "first stroke sets the offset")
-        for _ in 0..<8 { aim.learn(anchor: CGPoint(x: 0.5, y: 0.1), pen: CGPoint(x: 0.2, y: 0.5)) }
+        for _ in 0..<8 { aim.learn(anchor: CGPoint(x: 0.5, y: 0.1), carried: nil, pen: CGPoint(x: 0.2, y: 0.5)) }
         let before = aim.offset
-        aim.learn(anchor: CGPoint(x: 0.9, y: 0.1), pen: CGPoint(x: 0.05, y: 0.95))
+        aim.learn(anchor: CGPoint(x: 0.9, y: 0.1), carried: nil, pen: CGPoint(x: 0.05, y: 0.95))
         check(aim.offset == before, "a far-off landing (hand moved) is ignored")
         check(aim.predict(from: CGPoint(x: 0.1, y: 0.9)) == CGPoint(x: 0, y: 1), "prediction stays on the pad")
+
+        // Between strokes: the lift point travels with the hand.
+        func touch(_ id: Int, _ x: CGFloat, _ y: CGFloat) -> TouchSample {
+            TouchSample(id: id, pos: CGPoint(x: x, y: y), deviceSize: .zero, resting: true)
+        }
+        var tracker = PenAimTracker()
+        var carriedAim = PenAim(hand: .right)
+        _ = tracker.update(pen: touch(1, 0.40, 0.50), contacts: [touch(7, 0.70, 0.10)], anchor: CGPoint(x: 0.7, y: 0.1), now: 0, aim: &carriedAim)
+        _ = tracker.update(pen: nil, contacts: [touch(7, 0.70, 0.10)], anchor: CGPoint(x: 0.7, y: 0.1), now: 0.05, aim: &carriedAim)
+        let slid = [touch(7, 0.75, 0.12), touch(8, 0.9, 0.1)]   // palm slid right; 8 is new
+        let carried = tracker.carried(contacts: slid, now: 0.2)
+        check(carried.map { abs($0.x - 0.45) < 1e-9 && abs($0.y - 0.52) < 1e-9 } == true,
+              "lift point moves with the contacts present at lift")
+        check(tracker.carried(contacts: [touch(9, 0.7, 0.1)], now: 0.2) == nil, "no shared contact, no carried point")
+        check(tracker.carried(contacts: slid, now: 0.05 + PenAimTracker.maxAir) == nil, "an old lift is forgotten")
+        let blend = carriedAim.predict(anchor: CGPoint(x: 0.75, y: 0.12), carried: carried)!
+        let palmGuess = carriedAim.predict(from: CGPoint(x: 0.75, y: 0.12))
+        check(abs(blend.x - (0.7 * 0.45 + 0.3 * palmGuess.x)) < 1e-9, "both clues blend 70/30")
+        // Landing 0.03 right of the carried point: the bias learns that step.
+        let learned = tracker.update(pen: touch(2, 0.48, 0.52), contacts: slid, anchor: CGPoint(x: 0.75, y: 0.12), now: 0.2, aim: &carriedAim)
+        check(learned && abs(carriedAim.bias.x - 0.03) < 1e-9 && carriedAim.carriedSamples == 1, "pen-down learns the bias")
+        let old = Data(#"{"offset":[-0.3,0.35],"spread":0.08,"samples":12}"#.utf8)
+        let decoded = try? JSONDecoder().decode(PenAim.self, from: old)
+        check(decoded?.samples == 12 && decoded?.bias == .zero, "settings saved before the bias still load")
 
         // Press-to-write calibration.
         let light = (0..<150).map { 20 + Double($0 % 10) }          // 20…29

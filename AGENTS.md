@@ -66,6 +66,7 @@ scripts/make-dmg.sh 1.2    # 生成 dist/TrackpadStudio-Handwriting-1.2.dmg，�
 ```bash
 S=Sources/TrackpadStudio
 swiftc -parse-as-library scripts/test_palm.swift $S/{TrackpadCore,PalmRejection,PenAim,PressureGate}.swift -o /tmp/tp && /tmp/tp
+swiftc -parse-as-library scripts/test_smoothing.swift $S/{BoardModel,BoardArchive,InkRenderer,StrokeSmoothing}.swift -o /tmp/tsm && /tmp/tsm
 swiftc -parse-as-library scripts/test_eraser.swift $S/{BoardModel,BoardArchive,InkRenderer,TrackpadCore,PalmRejection}.swift -o /tmp/te && /tmp/te
 swiftc -parse-as-library scripts/test_archive.swift $S/{BoardModel,BoardArchive,InkRenderer}.swift -o /tmp/ta && /tmp/ta /tmp/archive-check.json
 swiftc -parse-as-library scripts/test_notes.swift $S/{BoardModel,BoardArchive,InkRenderer,NoteLibrary}.swift -o /tmp/tn && /tmp/tn
@@ -75,11 +76,13 @@ swift build --package-path . -c release
 
 `test_connector` 不带参数时运行合成用例；带录制文件时，把原始帧回放给连接器，检查按下和抬起是否成对，并统计笔画数和双指手势帧数（手掌、单指、双指录制中的笔画数都应为 0）。
 
-落笔预测回放（用真实书写录制评估 PenAim：先预测再学习，输出误差中位数和落在标记圈内的比例）：
+落笔预测回放（用真实书写录制评估 PenAim：先预测再学习，对比“只看手掌”和“加上抬笔点随手移动”两种预测，输出误差毫米数和落在标记圈内的比例；可直接给持续记录的文件夹，.gz 也能读）：
 
 ```bash
-swiftc -parse-as-library scripts/replay_penaim.swift $S/{TrackpadCore,PalmRejection,PenAim}.swift -o /tmp/aim && /tmp/aim calibration/reference/3-write-*.jsonl
+swiftc -parse-as-library scripts/replay_penaim.swift $S/{TrackpadCore,PalmRejection,PenAim}.swift -o /tmp/aim && /tmp/aim ~/Library/Application\ Support/TrackpadStudio-Handwriting/touchlog/continuous
 ```
+
+2026-10-10 用 278 次落笔回放：有最近抬笔点时（186 次）中位误差 3.3 mm、90% 在 6.4 mm 内（只看手掌是 4.0 / 8.9 mm）；剩下的多是手整个抬起后重新放下，只能靠手掌位置。
 
 界面截图自检（使用临时笔记库，不碰真实笔记；输出 window.png、window-writing.png（书写模式）、note.pdf、note.png 后自动退出）：
 

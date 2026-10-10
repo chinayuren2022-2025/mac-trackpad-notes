@@ -3,11 +3,13 @@ import AppKit
 // How well PenAim predicts pen landings, replayed from real recordings:
 // S=Sources/TrackpadStudio
 // swiftc -parse-as-library scripts/replay_penaim.swift $S/{TrackpadCore,PalmRejection,PenAim}.swift -o /tmp/aim
-// /tmp/aim [--left] file.jsonl...
-// Every pen-down with the palm resting is predicted BEFORE it is learned
-// from (the app's situation). Errors are reported in screen points for a
-// writing area 850 pt wide (the default window), and as a share of the
-// landings that fall inside the drawn marker.
+// /tmp/aim [--left] file.jsonl|file.jsonl.gz|folder...
+// A folder is searched for recordings (the continuous log folder works).
+// Every pen-down is predicted BEFORE it is learned from (the app's
+// situation), by the palm offset alone (the old marker) and by the full
+// prediction with the carried lift point. Files that record the app's own
+// pen choice are replayed with it; older ones re-run the palm rejector.
+// Errors are millimetres on the pad.
 
 @main
 struct AimReplay {
@@ -17,18 +19,22 @@ struct AimReplay {
         var args = Array(CommandLine.arguments.dropFirst())
         let hand: PalmRejector.Hand = args.contains("--left") ? .left : .right
         args.removeAll { $0 == "--left" }
-        let width: CGFloat = 850, height: CGFloat = 850 * 0.625
+        let mm = CGSize(width: 124, height: 76)
         var aim = PenAim(hand: hand)
-        var errors: [CGFloat] = []
-        var inside = 0
-        var pens = 0
-        for path in args {
+        var palmOnly = PenAim(hand: hand)
+        var full: [CGFloat] = [], old: [CGFloat] = []
+        var inside = 0, pens = 0
+        func miss(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+            hypot((a.x - b.x) * mm.width, (a.y - b.y) * mm.height)
+        }
+        for path in recordings(args) {
             var rejector = PalmRejector()
             rejector.hand = hand
+            var tracker = PenAimTracker()
             var latest: [MT] = []
             var lastPen: Int?
             var previousAnchor: CGPoint?
-            for line in try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n") {
+            for line in try read(path).split(separator: "\n") {
                 guard let obj = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                       let type = obj["type"] as? String else { continue }
                 if type == "mt" {
@@ -51,40 +57,78 @@ struct AimReplay {
                     guard let m = latest.min(by: { d2($0, touch) < d2($1, touch) }), d2(m, touch) < 0.08 * 0.08 else { continue }
                     shapes[touch.id] = .init(size: m.size, majorAxis: m.maj, minorAxis: m.min)
                 }
-                let out = rejector.process(active, shapes: shapes, now: t)
-                // Same palm set as BoardTabView.updatePenAim.
-                let palms = all.filter(\.resting) + out.rejected.filter { touch in
+                let pen: TouchSample?, rejected: [TouchSample]
+                if obj.keys.contains("pen") {
+                    let id = obj["pen"] as? Int
+                    let ids = Set(obj["rejected"] as? [Int] ?? [])
+                    pen = active.first { $0.id == id }
+                    rejected = active.filter { ids.contains($0.id) }
+                } else {
+                    let out = rejector.process(active, shapes: shapes, now: t)
+                    pen = out.pen
+                    rejected = out.rejected
+                }
+                // Same sets as BoardTabView.updatePenAim.
+                let palms = all.filter(\.resting) + rejected.filter { touch in
                     !(shapes[touch.id].map(PalmRejector.isFingerShaped) ?? false)
                 }
                 let anchor = PenAim.anchor(of: palms.map(\.pos), hand: hand)
-                if let pen = out.pen, pen.id != lastPen {
+                let others = all.filter { $0.id != pen?.id }
+
+                if let pen, pen.id != lastPen {
                     pens += 1
-                    if let anchor, previousAnchor != nil {
-                        let guess = aim.predict(from: anchor)
-                        let radius = min(70, max(14, aim.spread * width))
-                        let error = hypot((guess.x - pen.pos.x) * width, (guess.y - pen.pos.y) * height)
-                        errors.append(error)
-                        if error <= radius { inside += 1 }
-                        aim.learn(anchor: anchor, pen: pen.pos)
+                    let guess = tracker.predict(aim, contacts: others, anchor: previousAnchor == nil ? nil : anchor, now: t)
+                    if let guess, let anchor, previousAnchor != nil {
+                        let error = miss(guess, pen.pos)
+                        full.append(error)
+                        old.append(miss(palmOnly.predict(from: anchor), pen.pos))
+                        // The drawn disc, at about 10 screen points per millimetre.
+                        if error <= min(3.6, max(1, aim.spread * mm.width * 0.6)) { inside += 1 }
+                        palmOnly.learn(anchor: anchor, carried: nil, pen: pen.pos)
                     }
                 }
-                lastPen = out.pen?.id
+                _ = tracker.update(pen: pen, contacts: others, anchor: anchor, now: t, aim: &aim)
+                lastPen = pen?.id
                 previousAnchor = anchor
             }
         }
-        guard !errors.isEmpty else { print("no pen-downs with a resting palm"); return }
-        func pct(_ values: [CGFloat], _ p: Double) -> Int {
+        guard !full.isEmpty else { print("no pen-downs with a resting palm"); return }
+        func pct(_ values: [CGFloat], _ p: Double) -> String {
             let sorted = values.sorted()
-            return Int(sorted[min(sorted.count - 1, Int(Double(sorted.count) * p))])
+            return String(format: "%.1f", sorted[min(sorted.count - 1, Int(Double(sorted.count) * p))])
         }
-        let trained = Array(errors.dropFirst(5))
-        print("pen-downs: \(pens), with palm resting: \(errors.count)")
-        print("all:          median \(pct(errors, 0.5)) pt, 75% \(pct(errors, 0.75)) pt")
-        if !trained.isEmpty {
-            print("after 5 strokes: median \(pct(trained, 0.5)) pt, 75% \(pct(trained, 0.75)) pt")
+        print("pen-downs: \(pens), with palm resting: \(full.count)")
+        print("palm offset only:  median \(pct(old, 0.5)) mm, 75% \(pct(old, 0.75)), 90% \(pct(old, 0.9))")
+        print("with lift point:   median \(pct(full, 0.5)) mm, 75% \(pct(full, 0.75)), 90% \(pct(full, 0.9))")
+        print("landed inside the marker: \(inside)/\(full.count)")
+        print(String(format: "offset (%.3f, %.3f), bias (%.4f, %.4f), spread %.3f",
+                     aim.offset.x, aim.offset.y, aim.bias.x, aim.bias.y, aim.spread))
+    }
+
+    /// Files named on the command line, folders searched for recordings.
+    static func recordings(_ args: [String]) -> [String] {
+        args.flatMap { arg -> [String] in
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: arg, isDirectory: &isFolder), isFolder.boolValue,
+                  let walker = FileManager.default.enumerator(atPath: arg) else { return [arg] }
+            return walker.compactMap { $0 as? String }
+                .filter { $0.hasSuffix(".jsonl") || $0.hasSuffix(".jsonl.gz") }
+                .sorted()
+                .map { (arg as NSString).appendingPathComponent($0) }
         }
-        print("landed inside the marker: \(inside)/\(errors.count)")
-        print(String(format: "learned offset (%.3f, %.3f), spread %.3f", aim.offset.x, aim.offset.y, aim.spread))
+    }
+
+    static func read(_ path: String) throws -> String {
+        guard path.hasSuffix(".gz") else { return try String(contentsOfFile: path, encoding: .utf8) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = ["-dc", path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
     }
 
     static func d2(_ m: MT, _ t: TouchSample) -> Double {

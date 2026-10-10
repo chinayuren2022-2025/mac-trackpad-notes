@@ -88,16 +88,20 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     }
     /// Before the pen touches, mark where it is expected to land (learned
     /// from where it lands relative to the resting palm).
-    var showPenAim = UserDefaults.standard.object(forKey: "showPenAim") as? Bool ?? false {
+    var showPenAim = UserDefaults.standard.object(forKey: "showPenAim") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(showPenAim, forKey: "showPenAim")
             needsDisplay = true
         }
     }
     private lazy var penAim = PenAim.load(hand: palmHand)
-    /// Centroid of the contacts judged to be the writing hand's palm.
-    private var palmAnchor: CGPoint?
-    private var lastPenID: Int?
+    private var aimTracker = PenAimTracker()
+    /// Where the pen should land (normalized pad position), while it is up
+    /// and the hand rests; nil hides the marker.
+    private var aimPoint: CGPoint?
+    /// The marker waits this long after a lift: shown during every quick
+    /// hop between strokes it would only flicker.
+    private let aimDelay: TimeInterval = 0.1
     /// Contact-shape pen detection via the private MultitouchSupport reader.
     var useContactSize = UserDefaults.standard.object(forKey: "palmUseContactSize") as? Bool ?? true {
         didSet {
@@ -140,6 +144,10 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     /// The eraser removes whole strokes instead of only the ink it touches.
     var eraseWholeStrokes = UserDefaults.standard.bool(forKey: "eraseWholeStrokes") {
         didSet { UserDefaults.standard.set(eraseWholeStrokes, forKey: "eraseWholeStrokes") }
+    }
+    /// Even out hand tremor as the stroke is drawn (StrokeSmoothing).
+    var smoothStrokes = UserDefaults.standard.object(forKey: "smoothStrokes") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(smoothStrokes, forKey: "smoothStrokes") }
     }
     /// Shape of the elected pen this frame, for the status readout.
     private var penShape: PalmRejector.ContactShape?
@@ -326,6 +334,11 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         MultitouchReader.shared.onFrame = { [weak self] fingers in
             self?.handleRawFrame(fingers)
         }
+        TouchRecorder.shared.isWriting = { [weak self] in
+            guard let self else { return false }
+            return self.isWriting && self.window?.isKeyWindow == true
+        }
+        TouchRecorder.shared.context = { [weak self] in self?.touchLogContext ?? [:] }
         addSubview(captureView)
 
         overlayView.frame = bounds
@@ -786,7 +799,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             } else {
                 palmRejector.reset()
                 rejectedTouches = []
-                palmAnchor = nil
+                aimPoint = nil
                 TouchRecorder.shared.recordTouches(
                     touches, pen: nil, rejected: [], sizes: rawContactSizes(for: touches)
                 )
@@ -876,6 +889,16 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         handle(.touches(touches))
     }
 
+    /// Written at the start of each continuous touch-log session.
+    private var touchLogContext: [String: Any] {
+        [
+            "hand": palmHand.rawValue, "penMaxMajor": penMaxMajor, "allowFinger": allowFinger,
+            "useContactSize": useContactSize, "palmRejection": palmRejectionEnabled,
+            "drawOnContact": drawOnContact, "mini": window is FloatingNotePanel,
+            "deviceSize": [Double(currentDeviceSize.width), Double(currentDeviceSize.height)],
+        ]
+    }
+
     private func handlePalmFiltered(_ touches: [TouchSample]) {
         let active = touches.filter { !$0.resting }
         let resting = touches.filter(\.resting)
@@ -896,38 +919,54 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         )
         rejectedTouches = out.rejected
         penShape = out.pen.flatMap { shapes[$0.id] }
-        updatePenAim(pen: out.pen, rejected: out.rejected, resting: resting, shapes: shapes)
+        updatePenAim(pen: out.pen, touches: touches, rejected: out.rejected, resting: resting, shapes: shapes, now: now)
         TouchRecorder.shared.recordTouches(
             touches, pen: out.pen?.id, rejected: out.rejected.map(\.id), sizes: sizes
         )
 
         if out.previousPenEnded {
-            if out.discardPrevious { cancelActiveDraft() }
+            if out.discardPrevious {
+                TouchRecorder.shared.note("discard")
+                cancelActiveDraft()
+            }
             // Close the old stroke first, or the new pen would continue it.
             if out.pen != nil { handleTouches(resting) }
         }
         handleTouches((out.pen.map { [$0] } ?? []) + resting)
     }
 
-    /// Tracks the palm, and on each new pen-down with the palm resting
-    /// learns where the tip sits relative to it.
+    /// Tracks the hand, learns from each new pen-down where the tip lands,
+    /// and moves the landing marker while the pen is up.
     private func updatePenAim(
-        pen: TouchSample?, rejected: [TouchSample], resting: [TouchSample],
-        shapes: [Int: PalmRejector.ContactShape]
+        pen: TouchSample?, touches: [TouchSample], rejected: [TouchSample], resting: [TouchSample],
+        shapes: [Int: PalmRejector.ContactShape], now: TimeInterval
     ) {
         // Fingers turned away (finger writing off) are not part of the palm.
         let palms = resting + rejected.filter { touch in
             !(shapes[touch.id].map(PalmRejector.isFingerShaped) ?? false)
         }
         let anchor = PenAim.anchor(of: palms.map(\.pos), hand: palmHand)
-        if let pen, pen.id != lastPenID, let anchor, palmAnchor != nil, interactionMode == .zen {
-            penAim.learn(anchor: anchor, pen: pen.pos)
+        let others = touches.filter { $0.id != pen?.id }
+        if aimTracker.update(pen: pen, contacts: others, anchor: anchor, now: now, aim: &penAim) {
             penAim.save(hand: palmHand)
         }
-        lastPenID = pen?.id
-        if anchor != palmAnchor {
-            palmAnchor = anchor
-            if showPenAim { overlayView.needsDisplay = true }
+        let point = pen == nil && anchor != nil
+            ? aimTracker.predict(penAim, contacts: others, anchor: anchor, now: now) : nil
+        guard showPenAim else { aimPoint = point; return }
+        let moved = switch (point, aimPoint) {
+        case let (a?, b?): hypot(a.x - b.x, a.y - b.y) > 0.001
+        case (nil, nil): false
+        default: true
+        }
+        aimPoint = point
+        guard moved else { return }
+        overlayView.needsDisplay = true
+        // Show it once the delay after the lift has passed, even if the
+        // hand is perfectly still by then.
+        if let lift = aimTracker.liftTime, now - lift < aimDelay {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (aimDelay - (now - lift))) { [weak self] in
+                self?.overlayView.needsDisplay = true
+            }
         }
     }
 
@@ -1298,13 +1337,19 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     @objc func undo(_ sender: Any?) {
         cancelActiveDraft()
         clearSelection()
-        if model.undo() { needsDisplay = true }
+        if model.undo() {
+            TouchRecorder.shared.note("undo", ["elements": model.elements.count])
+            needsDisplay = true
+        }
     }
 
     @objc func redo(_ sender: Any?) {
         cancelActiveDraft()
         clearSelection()
-        if model.redo() { needsDisplay = true }
+        if model.redo() {
+            TouchRecorder.shared.note("redo", ["elements": model.elements.count])
+            needsDisplay = true
+        }
     }
 
     @objc func copy(_ sender: Any?) {
@@ -1673,6 +1718,9 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 partial: !eraseWholeStrokes,
                 recordingUndo: !eraserGestureErased
             ) {
+                if !eraserGestureErased {
+                    TouchRecorder.shared.note("erase", ["x": Double(canvasPoint.x), "y": Double(canvasPoint.y)])
+                }
                 eraserGestureErased = true
             }
             eraserLastPoint = canvasPoint
@@ -1708,6 +1756,15 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             return
         }
 
+        // A contact that jumps a centimetre within one frame is the sensor
+        // re-assigning it (seen at the pad's edge), not the pen: start afresh
+        // instead of inking a straight line across the page.
+        if draft.tool.isFreehand,
+           hypot(draft.current.x - canvasPoint.x, draft.current.y - canvasPoint.y) > 10 * canvasUnitsPerMillimetre {
+            finishActiveDraft()
+            continueGesture(at: canvasPoint)
+            return
+        }
         draft.current = canvasPoint
         if draft.movesSelection {
             selectionOffset = CGPoint(x: canvasPoint.x - draft.start.x, y: canvasPoint.y - draft.start.y)
@@ -1727,6 +1784,12 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         activeDraft = draft
     }
 
+    /// The ink a pen or highlighter draft shows, smoothed while it is drawn
+    /// so the stroke kept at lift is exactly the one on screen.
+    private func inkSamples(of draft: Draft) -> [BoardStrokeSample] {
+        smoothStrokes ? StrokeSmoothing.smoothed(draft.strokeSamples, unit: canvasUnitsPerMillimetre) : draft.strokeSamples
+    }
+
     private func endEraserGesture() {
         eraserLastPoint = nil
         eraserGestureErased = false
@@ -1739,7 +1802,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
         switch draft.tool {
         case .pen, .highlighter:
-            model.append(.stroke(samples: draft.strokeSamples, color: draft.color))
+            model.append(.stroke(samples: inkSamples(of: draft), color: draft.color))
         case .line:
             model.append(.line(start: draft.start, end: draft.current, width: draft.width, color: draft.color))
         case .rectangle:
@@ -1763,6 +1826,15 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         case .eraser:
             break
         }
+        if draft.tool != .lasso, draft.tool != .eraser {
+            let points = draft.strokeSamples.map(\.point)
+            let xs = points.map(\.x), ys = points.map(\.y)
+            TouchRecorder.shared.note("stroke", [
+                "tool": draft.tool.rawValue, "n": points.count,
+                "box": [xs.min() ?? 0, ys.min() ?? 0, xs.max() ?? 0, ys.max() ?? 0].map(Double.init),
+                "elements": model.elements.count,
+            ])
+        }
         needsDisplay = true
     }
 
@@ -1785,6 +1857,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         cancelActiveDraft()
         clearSelection()
         model.remove(selected)
+        TouchRecorder.shared.note("delete", ["count": selected.count, "elements": model.elements.count])
         needsDisplay = true
     }
 
@@ -2071,8 +2144,8 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         currentTouches.removeAll(keepingCapacity: true)
         restingTouches.removeAll(keepingCapacity: true)
         rejectedTouches.removeAll(keepingCapacity: true)
-        palmAnchor = nil
-        lastPenID = nil
+        aimPoint = nil
+        aimTracker = PenAimTracker()
         navigatingIDs.removeAll()
         palmRejector.reset()
         matchedFinger = nil
@@ -2171,6 +2244,13 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             width: max(1, bounds.width - left - edgeInset),
             height: max(1, bounds.height - statusHeight - edgeInset)
         )
+    }
+
+    /// Canvas length of one millimetre moved on the trackpad.
+    private var canvasUnitsPerMillimetre: CGFloat {
+        // Before the first touch reports the device size, assume a 13" pad.
+        let millimetres = currentDeviceSize.width > 50 ? currentDeviceSize.width * 25.4 / 72 : 120
+        return trackpadRect.width / millimetres / model.zoom
     }
 
     private var trackpadRect: CGRect {
@@ -2341,7 +2421,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         let element: BoardElement
         switch draft.tool {
         case .pen, .highlighter:
-            renderer.draw(displayed(.stroke(samples: draft.strokeSamples, color: draft.color)))
+            renderer.draw(displayed(.stroke(samples: inkSamples(of: draft), color: draft.color)))
             return
         case .lasso:
             guard !draft.movesSelection, draft.strokeSamples.count > 1 else { return }
@@ -2425,8 +2505,9 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     /// is up.
     private func drawPenAim() {
         guard showPenAim, interactionMode == .zen, currentTouches.isEmpty, !isThreeFingerDrawing,
-              textEditor == nil, let anchor = palmAnchor else { return }
-        let point = TrackpadGeometry.map(penAim.predict(from: anchor), into: trackpadRect)
+              textEditor == nil, let aim = aimPoint else { return }
+        if let lift = aimTracker.liftTime, ProcessInfo.processInfo.systemUptime - lift < aimDelay { return }
+        let point = TrackpadGeometry.map(aim, into: trackpadRect)
         let radius = min(36, max(10, penAim.spread * trackpadRect.width * 0.6))
         // Always the accent blue: it must read against ink of any color.
         let tint = accentColor

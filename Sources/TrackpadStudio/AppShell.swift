@@ -98,6 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func applicationWillTerminate(_ notification: Notification) {
         notes?.prepareToQuit()
+        // Compressed at the next launch if gzip does not get to run now.
+        TouchRecorder.shared.closeSession()
         FreeformConnector.shared.disarm()
         MultitouchReader.shared.stop()
     }
@@ -191,6 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         boardView?.selectToolFromMenu(tool)
     }
 
+    @objc private func toggleSmoothStrokes(_ sender: NSMenuItem) {
+        guard let boardView else { return }
+        boardView.smoothStrokes.toggle()
+        sender.state = boardView.smoothStrokes ? .on : .off
+    }
+
     @objc private func toggleWholeStrokeEraser(_ sender: NSMenuItem) {
         guard let boardView else { return }
         boardView.eraseWholeStrokes.toggle()
@@ -260,6 +268,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.reportRecording(url: url, mtFrames: mtFrames, nsFrames: nsFrames)
         }
         recorder.start(label: label, seconds: 20)
+    }
+
+    @objc private func toggleContinuousLog(_ sender: NSMenuItem) {
+        let recorder = TouchRecorder.shared
+        recorder.isContinuous.toggle()
+        if recorder.isContinuous { MultitouchReader.shared.start() }
+        sender.state = recorder.isContinuous ? .on : .off
+    }
+
+    @objc private func revealTouchLog(_ sender: Any?) {
+        let dir = TouchRecorder.continuousDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
     }
 
     private func reportRecording(url: URL, mtFrames: Int, nsFrames: Int) {
@@ -417,6 +438,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let whole = item("橡皮擦除整笔", #selector(toggleWholeStrokeEraser(_:)), target: self)
         whole.state = defaults.bool(forKey: "eraseWholeStrokes") ? .on : .off
         toolMenu.addItem(whole)
+        let smooth = item("修顺笔迹（减轻手抖）", #selector(toggleSmoothStrokes(_:)), target: self)
+        smooth.state = (defaults.object(forKey: "smoothStrokes") as? Bool ?? true) ? .on : .off
+        toolMenu.addItem(smooth)
 
         let paperItems = PaperStyle.allCases.map { paper -> NSMenuItem in
             let menuItem = item("纸张：" + paper.name, #selector(selectPaper(_:)), target: self)
@@ -424,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return menuItem
         }
         let aim = item("手掌放下时预测落笔位置", #selector(togglePenAim(_:)), target: self)
-        aim.state = (defaults.object(forKey: "showPenAim") as? Bool ?? false) ? .on : .off
+        aim.state = (defaults.object(forKey: "showPenAim") as? Bool ?? true) ? .on : .off
         let debug = item("在状态栏显示调试信息", #selector(toggleDebugInfo(_:)), target: self)
         debug.state = defaults.bool(forKey: "showDebugInfo") ? .on : .off
         _ = submenu("显示", in: main, paperItems + [
@@ -470,11 +494,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             menuItem.representedObject = label
             return menuItem
         }
+        let continuous = item("持续记录书写时的触点数据（仅存本机）", #selector(toggleContinuousLog(_:)), target: self)
+        continuous.state = TouchRecorder.shared.isContinuous ? .on : .off
         _ = submenu("防误触", in: main, [palm, .separator()] + hands + [
             .separator(), shape, finger, hint, .separator(),
             item("在无边记中手写（连接器，实验）", #selector(toggleFreeformConnector(_:)), target: self),
             .separator(), recordHeader,
-        ] + recordings)
+        ] + recordings + [
+            .separator(), continuous,
+            item("在访达中显示触点记录", #selector(revealTouchLog(_:)), target: self),
+        ])
 
         let windowMenu = submenu("窗口", in: main, [
             item("最小化", #selector(NSWindow.performMiniaturize(_:)), "m"),

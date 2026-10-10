@@ -33,6 +33,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSArchitecturePriority</key><array><string>arm64</string></array>
 <key>LSRequiresNativeExecution</key><true/>
+<key>NSCameraUsageDescription</key><string>用 iPhone 摄像头（桌上视角）看笔尖在触控板上方的位置，显示落笔光标。画面只在本机处理，不保存、不上传。</string>
+<key>NSCameraUseContinuityCameraDeviceType</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSHumanReadableCopyright</key><string>Based on Trackpad Studio (MIT)</string>

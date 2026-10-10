@@ -4,6 +4,8 @@
 
 [English](README.en.md)
 
+> **这是 `camera-pen` 试验分支**：在主版本之上加了「用 iPhone 摄像头显示悬空的笔尖」。不需要这个功能，请用 [main 分支](../../tree/main) 和 Releases 里的正式版，更轻。
+
 ![主窗口](docs/images/main-window.png)
 
 整块触控板对应画布上的书写区域：笔尖碰到哪里，字就写在哪里。防误触会按触点形状分出笔尖、手指和手掌，写字时手腕可以放心搭在触控板上。
@@ -22,6 +24,17 @@
 - **本地优先**：所有笔记只存在你自己的电脑上，不联网。
 
 <img src="docs/images/mini-window.png" width="360" alt="小窗">
+
+## iPhone 摄像头悬停光标（试验）
+
+触控板只有笔尖碰到才知道它在哪。这个分支借 iPhone 的“桌上视角”（Desk View，超广角从上往下拍）看着笔尖：**笔还悬在空中时，画布上就有一个小圆圈告诉你它会落在哪里**。
+
+- **摆法**：iPhone 竖着立在 MacBook 屏幕左侧（或用连续互通相机支架夹在屏幕上沿），后置摄像头朝向键盘和触控板。
+- **对准**：「显示 → 摄像头对准…」，在画面里把四个黄点拖到触控板四个角，大致对上即可。之后每次落笔，程序都会用真实触点自动校正，并记住你的笔尖长什么样。
+- **打开**：「显示 → 用 iPhone 摄像头显示悬停的笔尖」。
+- **光标在笔指着的地方**：笔悬空停一会儿时，光标落在笔杆往前延长、碰到触控板的位置，而不是笔尖正下方。往前多远是从你每次悬空瞄准后的落点慢慢学出来的（单个摄像头看不出笔有多高）。
+- 需要 iPhone 11 及更新机型（不含 SE）、macOS 13 及以上，并在 iPhone「设置 → 通用 → 隔空播放与接力」里打开“连续互通相机”。
+- 画面只在本机处理，不保存、不上传。手机挪动后重新拖四个角；状态栏提示“摄像头对不准了”也是这个意思。
 
 ## 配合讲义使用
 
@@ -62,7 +75,7 @@
 ```bash
 xcode-select --install   # 首次：安装命令行工具
 scripts/deploy.sh        # 编译并安装到 ~/Applications
-scripts/make-dmg.sh 1.1  # 打包 dist/TrackpadStudio-Handwriting-1.1.dmg
+scripts/make-dmg.sh 1.2-camera  # 打包 dist/TrackpadStudio-Handwriting-1.2-camera.dmg
 ```
 
 测试命令见 [AGENTS.md](AGENTS.md)。
@@ -73,7 +86,7 @@ scripts/make-dmg.sh 1.1  # 打包 dist/TrackpadStudio-Handwriting-1.1.dmg
 
 ## 已知限制
 
-- 电容触控板感应不到悬空的笔尖，所以没有"悬停预览"；"轻触显示位置"模式是替代办法。
+- 电容触控板感应不到悬空的笔尖；本分支用 iPhone 摄像头补上了悬停光标，快速甩笔时可能短暂跟丢。
 - 用到了 macOS 私有接口（MultitouchSupport 读触点形状，窗口服务器接口在别的应用前台时隐藏指针），所以不能上架 App Store，系统大版本更新后可能需要适配。
 - 压力感应依赖触控板是否报告压力数据，需要在应用里校准一次。
 

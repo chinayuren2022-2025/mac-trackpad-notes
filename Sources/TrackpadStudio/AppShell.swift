@@ -339,6 +339,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sender.state = boardView.showPenAim ? .on : .off
     }
 
+    @objc private func toggleCameraPen(_ sender: NSMenuItem) {
+        guard let boardView else { return }
+        boardView.showCameraPen.toggle()
+        sender.state = boardView.showCameraPen ? .on : .off
+        if boardView.showCameraPen, CameraPen.shared.calibration == nil {
+            CameraAlignWindowController.shared.present()
+        }
+    }
+
+    @objc private func alignCamera(_ sender: Any?) { CameraAlignWindowController.shared.present() }
+
     @objc private func toggleAllowFinger(_ sender: NSMenuItem) {
         guard let boardView else { return }
         boardView.allowFinger.toggle()
@@ -449,6 +460,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let aim = item("手掌放下时预测落笔位置", #selector(togglePenAim(_:)), target: self)
         aim.state = (defaults.object(forKey: "showPenAim") as? Bool ?? true) ? .on : .off
+        let camera = item("用 iPhone 摄像头显示悬停的笔尖", #selector(toggleCameraPen(_:)), target: self)
+        camera.state = defaults.bool(forKey: "cameraPen.enabled") ? .on : .off
         let debug = item("在状态栏显示调试信息", #selector(toggleDebugInfo(_:)), target: self)
         debug.state = defaults.bool(forKey: "showDebugInfo") ? .on : .off
         _ = submenu("显示", in: main, paperItems + [
@@ -463,6 +476,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item("切换书写 / 指针模式（Esc）", #selector(toggleWriting(_:)), target: self),
             .separator(),
             aim,
+            camera,
+            item("摄像头对准…", #selector(alignCamera(_:)), target: self),
+            .separator(),
             debug,
         ])
 

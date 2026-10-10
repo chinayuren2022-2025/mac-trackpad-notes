@@ -20,6 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.0-handwriting</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>NSCameraUsageDescription</key><string>用 iPhone 摄像头（桌上视角）看笔尖在触控板上方的位置，显示落笔光标。画面只在本机处理，不保存、不上传。</string>
+<key>NSCameraUseContinuityCameraDeviceType</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>

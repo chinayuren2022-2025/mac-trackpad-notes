@@ -31,6 +31,10 @@ scripts/make-dmg.sh 1.2    # 生成 dist/TrackpadStudio-Handwriting-1.2.dmg，�
 | `FreeformConnector.swift` | 连接器的系统部分：用事件监听屏蔽触控板原有的指针和点击（仅在无边记位于前台时），模拟鼠标事件，定位无边记窗口，显示书写区域虚线框和菜单栏状态，⌃⌥⌘F 切换书写/鼠标模式。需要“辅助功能”权限 |
 | `AppShell.swift` | 菜单与命令行模式（`--snapshot DIR`、`--bench 录制文件 份数`）；菜单栏图标与全局快捷键 ⌃⌥N |
 | `NotesWindow.swift` | 主窗口与小窗 `FloatingNotePanel`（非激活浮动面板，`.canJoinAllSpaces` + `.fullScreenAuxiliary`，能浮在其他应用的全屏界面上）。只有一个画布实例，在两个窗口之间移动 |
+| `PadCalibration.swift` | 摄像头画面 ↔ 触控板坐标的单应性（`Homography.fit` 加权最小二乘）。从手动拖的四角出发（每角权重 4），之后每次落笔把“跟踪器看到的像素 ↔ 触点位置”作为一对加进来重拟合；满 20 对后，偏离 0.08 以上的不学，连续 8 次偏离算“对不准”（手机动过） |
+| `TipTracker.swift` | 笔尖外观跟踪：落笔帧里沿笔身截一条模板（笔尖后 16 px 到笔身方向 70 px、两侧各 28 px，方向由标定 + 左右手算出，不从画面猜；留最近 3 个），在上次位置 ±80 px 内做半分辨率归一化互相关（vImage 卷积 + 积分图）；分数 < 0.6 不算，< 0.8 且离上次超过 40 px ×（1 + 连续丢失次数）算跳错。**不要用以笔尖为中心的方块**：方块大半是触控板，笔尖在玻璃上的倒影也在里面，悬空时会跟着倒影跑。`HoverCursor`：落笔时学习“光标 − 落点”的固定偏差（主要是视差：抬起的笔尖看起来比正下方更远离摄像头）并扣掉；笔离开触控板 0.3–0.7 s 后渐渐把光标沿笔杆往前推 `reach` 毫米（笔杆延长线和触控板的交点，而不是笔尖正下方；方向由左右手定，长度从“悬空 ≥ 1 s 后落笔”时落点比 0.15–0.4 s 前的位置往前多少学来，偏离笔杆线 8 mm 以上的不学；单摄像头量不出笔尖高度，只能这样学）；字母之间的快速抬笔不加；One Euro 平滑（最小截止 2 Hz，β 0.02/mm） |
+| `CameraPen.swift` | AVCapture（优先“桌上视角”设备，取最大分辨率，420f 亮度平面），画面时间 = 到达 − 0.05 s 对上触点；落笔帧学习，悬空帧报告笔尖的触控板坐标（`tipChanged` 通知）；标定存 UserDefaults `cameraPen.calibration` |
+| `CameraAlignWindow.swift` | 「显示 → 摄像头对准…」：实时画面、四角拖动、旋转显示、学习进度和“对不准”提示 |
 | `GlobalHotKey.swift` | Carbon `RegisterEventHotKey` 全局快捷键，不需要任何权限 |
 
 ## 当前阈值（均按原作者的手和笔校准）
@@ -83,6 +87,18 @@ swiftc -parse-as-library scripts/replay_penaim.swift $S/{TrackpadCore,PalmReject
 ```
 
 2026-10-10 用 278 次落笔回放：有最近抬笔点时（186 次）中位误差 3.3 mm、90% 在 6.4 mm 内（只看手掌是 4.0 / 8.9 mm）；剩下的多是手整个抬起后重新放下，只能靠手掌位置。
+
+摄像头笔尖跟踪（单元测试 + 用录好的画面回放；画面是逐帧 JPEG，文件名 `名字-序号-uptime.jpg`（uptime 与触点记录同一时钟），四角为 左下 左上 右上 右下 的像素坐标）：
+
+```bash
+swiftc -parse-as-library scripts/test_camerapen.swift $S/{PadCalibration,TipTracker}.swift -o /tmp/tcam && /tmp/tcam
+swiftc -O -parse-as-library scripts/replay_camerapen.swift $S/{PadCalibration,TipTracker}.swift -o /tmp/camreplay
+/tmp/camreplay <画面文件夹> <触点记录.jsonl.gz> "x,y x,y x,y x,y"
+```
+
+2026-10-10 用 174 帧桌上视角原始画面（1920×1440）回放：落笔帧在学习之前就找到笔尖，误差中位 1.7 mm、90% 在 2.8 mm 内；悬空帧 31/31 都有可信位置；每帧 1.2 ms。
+同日 60 秒、1304 帧（22 帧/秒，44 次落笔）的录制，方块模板 → 沿笔身模板 + 门槛 + 跳错拦截 + HoverCursor：悬空光标“尖刺”（偏离前后两帧连线 > 5 mm）约 11% → 2%；落笔前 0.05 s 光标离落点中位 7.0 → 3.7 mm（90%：15.2 → 8.6 mm）；悬空帧有光标的比例 100% → 79%（看不清时宁可不显示）；每帧 5 ms。剩下的误差主要是落笔前最后几十毫秒笔还在动，以及笔抬得越高视差越大。四角偏 10–15 px 时中位误差仍约 1.7 mm（模板就在标定位置学的，自洽），所以手动拖角只要大致对就行。
+同一录制，加上沿笔杆的 reach（学到 7.4 mm）：悬空超过 1 s 再落笔的 6–7 次里，落笔前 0.3 s 光标离落点中位 10.2 → 6.8 mm、0.2 s 12.1 → 8.5 mm、0.1 s 10.9 → 9.7 mm，最后 0.05 s 略差（9.2 → 10.4，笔正沿笔杆往下落）；字母间快速抬笔不变（0.05 s 3.7 mm）。逐帧看：长时间悬空瞄准时落点在笔尖前方 5–24 mm、几乎正好在笔杆延长线上（横向只差 1–4 mm），所以方向用固定的手的方向就够（画面里量的笔杆角度中位 145°，固定方向 149°）。样本少，参数也是在这段录制上挑的，需要更多录制确认。
 
 界面截图自检（使用临时笔记库，不碰真实笔记；输出 window.png、window-writing.png（书写模式）、note.pdf、note.png 后自动退出）：
 

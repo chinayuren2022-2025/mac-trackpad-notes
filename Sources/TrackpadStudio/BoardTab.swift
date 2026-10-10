@@ -102,6 +102,16 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     /// The marker waits this long after a lift: shown during every quick
     /// hop between strokes it would only flicker.
     private let aimDelay: TimeInterval = 0.1
+    /// A camera looking down at the pad shows the hovering tip
+    /// (`CameraPen`); it replaces the palm-based marker while it sees it.
+    var showCameraPen = UserDefaults.standard.bool(forKey: "cameraPen.enabled") {
+        didSet {
+            UserDefaults.standard.set(showCameraPen, forKey: "cameraPen.enabled")
+            if showCameraPen { CameraPen.shared.start() } else { CameraPen.shared.stop() }
+            needsDisplay = true
+        }
+    }
+    private var cameraObserver: NSObjectProtocol?
     /// Contact-shape pen detection via the private MultitouchSupport reader.
     var useContactSize = UserDefaults.standard.object(forKey: "palmUseContactSize") as? Bool ?? true {
         didSet {
@@ -344,6 +354,10 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         overlayView.frame = bounds
         overlayView.autoresizingMask = [.width, .height]
         addSubview(overlayView)
+        cameraObserver = NotificationCenter.default.addObserver(
+            forName: CameraPen.tipChanged, object: nil, queue: .main
+        ) { [weak self] _ in self?.overlayView.needsDisplay = true }
+        if showCameraPen { CameraPen.shared.start() }
 
         registerForDraggedTypes([.fileURL, .png, .tiff, .pdf])
 
@@ -361,6 +375,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
     deinit {
         pollTimer?.invalidate()
+        if let cameraObserver { NotificationCenter.default.removeObserver(cameraObserver) }
         for observer in windowObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -653,7 +668,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         drawEmptyStateHint()
         drawTrackpadOverlay()
         drawTouchMarkers()
-        drawPenAim()
+        if !drawCameraTip() { drawPenAim() }
         drawToolbar()
         drawCursor()
         drawStatusStrip()
@@ -800,6 +815,9 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 palmRejector.reset()
                 rejectedTouches = []
                 aimPoint = nil
+                CameraPen.shared.noteContact(
+                    touches.count == 1 ? touches[0].pos : nil, at: ProcessInfo.processInfo.systemUptime
+                )
                 TouchRecorder.shared.recordTouches(
                     touches, pen: nil, rejected: [], sizes: rawContactSizes(for: touches)
                 )
@@ -920,6 +938,7 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         rejectedTouches = out.rejected
         penShape = out.pen.flatMap { shapes[$0.id] }
         updatePenAim(pen: out.pen, touches: touches, rejected: out.rejected, resting: resting, shapes: shapes, now: now)
+        CameraPen.shared.noteContact(out.pen?.pos, at: now)
         TouchRecorder.shared.recordTouches(
             touches, pen: out.pen?.id, rejected: out.rejected.map(\.id), sizes: sizes
         )
@@ -2535,6 +2554,27 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         cross.stroke()
     }
 
+    /// Ring where the camera sees the hovering tip; false when there is
+    /// nothing fresh to show (the palm marker stands in).
+    private func drawCameraTip() -> Bool {
+        guard showCameraPen, interactionMode == .zen, currentTouches.isEmpty, !isThreeFingerDrawing,
+              textEditor == nil, let tip = CameraPen.shared.tip,
+              ProcessInfo.processInfo.systemUptime - tip.time < 0.3 else { return false }
+        let pad = CGPoint(x: min(1.05, max(-0.05, tip.pad.x)), y: min(1.05, max(-0.05, tip.pad.y)))
+        let point = TrackpadGeometry.map(pad, into: trackpadRect)
+        let ring = NSBezierPath(ovalIn: CGRect(x: point.x - 7, y: point.y - 7, width: 14, height: 14))
+        NSColor.white.withAlphaComponent(0.9).setStroke()   // halo over dark ink
+        ring.lineWidth = 4.5
+        ring.stroke()
+        accentColor.setStroke()
+        ring.lineWidth = 2
+        ring.stroke()
+        let dot = NSBezierPath(ovalIn: CGRect(x: point.x - 1.5, y: point.y - 1.5, width: 3, height: 3))
+        accentColor.setFill()
+        dot.fill()
+        return true
+    }
+
     private func drawTouchMarkers() {
         guard interactionMode == .zen else { return }
 
@@ -2893,6 +2933,17 @@ final class BoardTabView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             if useContactSize && !MultitouchReader.shared.isAvailable { palmText += "（未授权输入监控）" }
             if !rejectedTouches.isEmpty { palmText += " · 已忽略 \(rejectedTouches.count)" }
             item(palmText, color: rejectedTouches.isEmpty ? mutedColor : .systemRed)
+        }
+
+        if zen && showCameraPen {
+            let camera = CameraPen.shared
+            if !camera.isRunning {
+                item("摄像头：" + camera.status, color: .systemRed)
+            } else if camera.calibration == nil {
+                item("摄像头：请先对准（显示菜单）", color: .systemRed)
+            } else if camera.calibration?.isLost == true {
+                item("摄像头对不准了：重新对准", color: .systemRed)
+            }
         }
 
         if showDebugInfo && zen && MultitouchReader.shared.isAvailable {

@@ -4,6 +4,8 @@
 
 [中文](README.md)
 
+> **This is the experimental `camera-pen` branch**: the main version plus a hover cursor seen by an iPhone camera. If you don't need it, use the [main branch](../../tree/main) and the regular Releases, which are lighter.
+
 ![Main window](docs/images/main-window.png)
 
 The whole trackpad maps onto the writing area of the canvas: wherever the tip touches is where the ink goes. Palm rejection tells the pen tip, fingers and palm apart by contact shape, so your wrist can rest on the pad while you write.
@@ -24,6 +26,17 @@ The interface is in Chinese.
 - **Local only**: notes stay on your Mac, nothing goes online.
 
 <img src="docs/images/mini-window.png" width="360" alt="Mini window">
+
+## iPhone camera hover cursor (experimental)
+
+The trackpad only knows where the pen is once it touches. This branch watches the tip through the iPhone's Desk View (the ultra-wide camera looking down), so **a small ring on the canvas shows where the pen will land while it is still in the air**.
+
+- **Setup**: stand the iPhone upright beside the left edge of the MacBook screen (or clip it to the top with a Continuity Camera mount), rear camera facing the keyboard and trackpad.
+- **Align**: 显示 (Display) → 摄像头对准… (camera alignment), drag the four yellow dots onto the trackpad's corners; roughly is enough. Every touch then corrects the map from the real contact and teaches the app what your tip looks like.
+- **Turn on**: 显示 (Display) → 用 iPhone 摄像头显示悬停的笔尖 (show the hovering tip with the iPhone camera).
+- **The cursor sits where the pen points**: after the pen has hovered a moment, the ring moves to where the pen's axis meets the trackpad, not straight below the tip. How far ahead is learned from where you land after aiming (one camera cannot see how high the tip is).
+- Needs an iPhone 11 or later (not SE) and macOS 13 or later, with Continuity Camera turned on in the iPhone's Settings → General → AirPlay & Continuity.
+- Frames are processed on the Mac only, never saved or uploaded. If the phone moves, drag the corners again; the "camera is off" warning in the status bar means the same.
 
 ## Use it with lecture notes
 
@@ -61,7 +74,7 @@ The interface is in Chinese.
 ```bash
 xcode-select --install   # once: command line tools
 scripts/deploy.sh        # build and install into ~/Applications
-scripts/make-dmg.sh 1.1  # dist/TrackpadStudio-Handwriting-1.1.dmg
+scripts/make-dmg.sh 1.2-camera  # dist/TrackpadStudio-Handwriting-1.2-camera.dmg
 ```
 
 Test commands are in [AGENTS.md](AGENTS.md).
@@ -72,7 +85,7 @@ The palm-rejection thresholds were calibrated on the author's hand and pen from 
 
 ## Known limits
 
-- A capacitive trackpad cannot sense a hovering tip, so there is no hover preview; the light-touch mode is the workaround.
+- A capacitive trackpad cannot sense a hovering tip; this branch adds a hover cursor from the iPhone camera, which can lose the tip for a moment during fast flicks.
 - It uses private macOS interfaces (MultitouchSupport for contact shapes, a window-server property to hide the pointer while another app is in front), so it cannot go on the App Store and may need updating after major macOS releases.
 - Pressure sensing depends on the trackpad reporting pressure and needs a one-time calibration in the app.
 
